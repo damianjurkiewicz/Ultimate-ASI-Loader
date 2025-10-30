@@ -10,6 +10,11 @@
 #include <map>
 #include <set>
 #include <unordered_set>
+#include <unordered_map>
+#include <algorithm>
+#include <limits>
+#include <cwchar>
+#include <cwctype>
 #include <FunctionHookMinHook.hpp>
 #include <shellapi.h>
 #include <SubAuth.h>
@@ -268,6 +273,7 @@ HRESULT CALLBACK TaskDialogCallbackProc(HWND hwnd, UINT uNotification, WPARAM wP
 HMODULE hm;
 std::vector<std::wstring> iniPaths;
 std::wstring sLoadFromAPI;
+std::unordered_map<std::wstring, int> gPluginLoadingOrder;
 
 bool iequals(std::wstring_view s1, std::wstring_view s2)
 {
@@ -441,6 +447,119 @@ std::wstring GetSelfName()
 {
     const std::wstring moduleFileName = GetModuleFileNameW(hm);
     return moduleFileName.substr(moduleFileName.find_last_of(L"/\\") + 1);
+}
+
+std::wstring TrimCopy(std::wstring str)
+{
+    auto first = str.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) return std::wstring();
+    auto last = str.find_last_not_of(L" \t\r\n");
+    return str.substr(first, last - first + 1);
+}
+
+std::wstring ToLowerCopy(std::wstring str)
+{
+    std::transform(str.begin(), str.end(), str.begin(), ::towlower);
+    return str;
+}
+
+std::unordered_map<std::wstring, int> ParseLoadingOrder(const std::vector<std::wstring>& fileNames)
+{
+    std::unordered_map<std::wstring, int> loadingOrder;
+    std::vector<wchar_t> buffer(256, L'\0');
+
+    for (const auto& file : fileNames)
+    {
+        DWORD charsReturned = 0;
+        while (true)
+        {
+            std::fill(buffer.begin(), buffer.end(), L'\0');
+            charsReturned = GetPrivateProfileSectionW(L"LoadingOrder", buffer.data(), static_cast<DWORD>(buffer.size()), file.c_str());
+            if (charsReturned == buffer.size() - 2)
+            {
+                buffer.resize(buffer.size() * 2, L'\0');
+                continue;
+            }
+            break;
+        }
+
+        if (charsReturned == 0)
+            continue;
+
+        const wchar_t* current = buffer.data();
+        while (*current != L'\0')
+        {
+            std::wstring entry(current);
+            current += entry.length() + 1;
+
+            auto pos = entry.find(L'=');
+            if (pos == std::wstring::npos)
+                continue;
+
+            auto key = TrimCopy(entry.substr(0, pos));
+            auto valueStr = TrimCopy(entry.substr(pos + 1));
+            if (key.empty() || valueStr.empty())
+                continue;
+
+            wchar_t* endPtr = nullptr;
+            long orderValue = wcstol(valueStr.c_str(), &endPtr, 10);
+            if (endPtr == valueStr.c_str())
+                continue;
+
+            bool trailingWhitespaceOnly = true;
+            for (; endPtr && *endPtr != L'\0'; ++endPtr)
+            {
+                if (!::iswspace(*endPtr))
+                {
+                    trailingWhitespaceOnly = false;
+                    break;
+                }
+            }
+
+            if (!trailingWhitespaceOnly)
+                continue;
+
+            if (orderValue > std::numeric_limits<int>::max())
+                orderValue = std::numeric_limits<int>::max();
+            if (orderValue < std::numeric_limits<int>::min())
+                orderValue = std::numeric_limits<int>::min();
+
+            auto normalizedKey = ToLowerCopy(key);
+            loadingOrder[normalizedKey] = static_cast<int>(orderValue);
+
+            if (normalizedKey.length() > 4 && normalizedKey.compare(normalizedKey.length() - 4, 4, L".asi") == 0)
+            {
+                loadingOrder[normalizedKey.substr(0, normalizedKey.length() - 4)] = static_cast<int>(orderValue);
+            }
+            else
+            {
+                loadingOrder[normalizedKey + L".asi"] = static_cast<int>(orderValue);
+            }
+        }
+    }
+
+    return loadingOrder;
+}
+
+int GetLoadingOrderForPlugin(const std::wstring& fileName)
+{
+    if (gPluginLoadingOrder.empty())
+        return std::numeric_limits<int>::max();
+
+    auto normalized = ToLowerCopy(fileName);
+    auto it = gPluginLoadingOrder.find(normalized);
+    if (it != gPluginLoadingOrder.end())
+        return it->second;
+
+    if (normalized.length() > 4 && normalized.compare(normalized.length() - 4, 4, L".asi") == 0)
+    {
+        auto base = normalized.substr(0, normalized.length() - 4);
+        auto baseIt = gPluginLoadingOrder.find(base);
+        if (baseIt != gPluginLoadingOrder.end())
+            return baseIt->second;
+    }
+
+    return std::numeric_limits<int>::max();
 }
 
 template<typename T, typename... Args>
@@ -870,6 +989,14 @@ void FindFiles(WIN32_FIND_DATAW* fd)
 {
     auto dir = GetCurrentDirectoryW();
 
+    struct PluginCandidate
+    {
+        WIN32_FIND_DATAW data{};
+        int order = std::numeric_limits<int>::max();
+    };
+
+    std::vector<PluginCandidate> candidates;
+
     HANDLE asiFile = FindFirstFileW(L"*.asi", fd);
     if (asiFile != INVALID_HANDLE_VALUE)
     {
@@ -879,80 +1006,102 @@ void FindFiles(WIN32_FIND_DATAW* fd)
             {
                 auto pos = wcslen(fd->cFileName);
 
-                if (fd->cFileName[pos - 4] == '.' &&
+                if (pos >= 4 &&
+                    fd->cFileName[pos - 4] == '.' &&
                     (fd->cFileName[pos - 3] == 'a' || fd->cFileName[pos - 3] == 'A') &&
                     (fd->cFileName[pos - 2] == 's' || fd->cFileName[pos - 2] == 'S') &&
                     (fd->cFileName[pos - 1] == 'i' || fd->cFileName[pos - 1] == 'I'))
                 {
-                    auto path = dir + L'\\' + fd->cFileName;
-
-                    if (GetModuleHandle(path.c_str()) == NULL)
-                    {
-                        auto h = LoadLib(path);
-                        SetCurrentDirectoryW(dir.c_str()); //in case asi switched it
-
-                        if (h == NULL)
-                        {
-                            auto e = GetLastError();
-                            if (e != ERROR_DLL_INIT_FAILED && e != ERROR_BAD_EXE_FORMAT) // in case dllmain returns false or IMAGE_MACHINE is not compatible
-                            {
-                                TASKDIALOGCONFIG tdc = { sizeof(TASKDIALOGCONFIG) };
-                                int nClickedBtn;
-                                BOOL bCheckboxChecked;
-                                LPCWSTR szTitle = L"ASI Loader", szHeader = L"", szContent = L"";
-                                TASKDIALOG_BUTTON aCustomButtons[] = { { DEFAULT_BUTTON, L"Continue" } };
-
-                                std::wstring msg = L"Unable to load " + std::wstring(fd->cFileName) + L". Error: " + std::to_wstring(e);
-                                szHeader = msg.c_str();
-
-                                if (e == ERROR_MOD_NOT_FOUND)
-                                {
-                                    szContent = L"This ASI file requires a dependency that is missing from your system. To identify the missing dependency, download and run the free, open-source app, " \
-                                        L"<a href=\"https://github.com/lucasg/Dependencies/releases/latest\">Dependencies</a>.\n\n" \
-                                        L"<a href=\"https://github.com/lucasg/Dependencies\">https://github.com/lucasg/Dependencies</a>";
-                                }
-
-                                tdc.hwndParent = NULL;
-                                tdc.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_SIZE_TO_CONTENT | TDF_CAN_BE_MINIMIZED;
-                                tdc.pButtons = aCustomButtons;
-                                tdc.cButtons = _countof(aCustomButtons);
-                                tdc.pszWindowTitle = szTitle;
-                                tdc.pszMainInstruction = szHeader;
-                                tdc.pszContent = szContent;
-                                tdc.pfCallback = TaskDialogCallbackProc;
-                                tdc.lpCallbackData = 0;
-
-                                if (!IsPackagedProcess())
-                                {
-                                    if (auto hCustomIcon = (HICON)LoadImage(hm, MAKEINTRESOURCE(IDI_CUSTOM_ICON), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED))
-                                    {
-                                        tdc.dwFlags |= TDF_USE_HICON_MAIN;
-                                        tdc.hMainIcon = hCustomIcon;
-                                    }
-                                    else
-                                    {
-                                        tdc.pszMainIcon = TD_ERROR_ICON;
-                                    }
-                                    std::ignore = TaskDialogIndirect(&tdc, &nClickedBtn, NULL, &bCheckboxChecked);
-                                }
-                                else
-                                    MessageBoxW(NULL, szHeader, szTitle, MB_OK | MB_ICONERROR);
-                            }
-                        }
-                        else
-                        {
-                            auto procedure = (void(*)())GetProcAddress(h, "InitializeASI");
-                            if (procedure != NULL)
-                            {
-                                procedure();
-                            }
-                        }
-                    }
+                    PluginCandidate candidate;
+                    candidate.data = *fd;
+                    candidate.order = GetLoadingOrderForPlugin(fd->cFileName);
+                    candidates.emplace_back(candidate);
                 }
             }
         }
         while (FindNextFileW(asiFile, fd));
         FindClose(asiFile);
+    }
+
+    if (candidates.empty())
+        return;
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](const PluginCandidate& lhs, const PluginCandidate& rhs)
+    {
+        return lhs.order < rhs.order;
+    });
+
+    auto loadPlugin = [&](const WIN32_FIND_DATAW& data)
+    {
+        auto path = dir + L'\\' + data.cFileName;
+
+        if (GetModuleHandle(path.c_str()) == NULL)
+        {
+            auto h = LoadLib(path);
+            SetCurrentDirectoryW(dir.c_str()); //in case asi switched it
+
+            if (h == NULL)
+            {
+                auto e = GetLastError();
+                if (e != ERROR_DLL_INIT_FAILED && e != ERROR_BAD_EXE_FORMAT) // in case dllmain returns false or IMAGE_MACHINE is not compatible
+                {
+                    TASKDIALOGCONFIG tdc = { sizeof(TASKDIALOGCONFIG) };
+                    int nClickedBtn;
+                    BOOL bCheckboxChecked;
+                    LPCWSTR szTitle = L"ASI Loader", szHeader = L"", szContent = L"";
+                    TASKDIALOG_BUTTON aCustomButtons[] = { { DEFAULT_BUTTON, L"Continue" } };
+
+                    std::wstring msg = L"Unable to load " + std::wstring(data.cFileName) + L". Error: " + std::to_wstring(e);
+                    szHeader = msg.c_str();
+
+                    if (e == ERROR_MOD_NOT_FOUND)
+                    {
+                        szContent = L"This ASI file requires a dependency that is missing from your system. To identify the missing dependency, download and run the free, open-source app, " \
+                            L"<a href=\"https://github.com/lucasg/Dependencies/releases/latest\">Dependencies</a>.\n\n" \
+                            L"<a href=\"https://github.com/lucasg/Dependencies\">https://github.com/lucasg/Dependencies</a>";
+                    }
+
+                    tdc.hwndParent = NULL;
+                    tdc.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_SIZE_TO_CONTENT | TDF_CAN_BE_MINIMIZED;
+                    tdc.pButtons = aCustomButtons;
+                    tdc.cButtons = _countof(aCustomButtons);
+                    tdc.pszWindowTitle = szTitle;
+                    tdc.pszMainInstruction = szHeader;
+                    tdc.pszContent = szContent;
+                    tdc.pfCallback = TaskDialogCallbackProc;
+                    tdc.lpCallbackData = 0;
+
+                    if (!IsPackagedProcess())
+                    {
+                        if (auto hCustomIcon = (HICON)LoadImage(hm, MAKEINTRESOURCE(IDI_CUSTOM_ICON), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED))
+                        {
+                            tdc.dwFlags |= TDF_USE_HICON_MAIN;
+                            tdc.hMainIcon = hCustomIcon;
+                        }
+                        else
+                        {
+                            tdc.pszMainIcon = TD_ERROR_ICON;
+                        }
+                        std::ignore = TaskDialogIndirect(&tdc, &nClickedBtn, NULL, &bCheckboxChecked);
+                    }
+                    else
+                        MessageBoxW(NULL, szHeader, szTitle, MB_OK | MB_ICONERROR);
+                }
+            }
+            else
+            {
+                auto procedure = (void(*)())GetProcAddress(h, "InitializeASI");
+                if (procedure != NULL)
+                {
+                    procedure();
+                }
+            }
+        }
+    };
+
+    for (const auto& candidate : candidates)
+    {
+        loadPlugin(candidate.data);
     }
 }
 
@@ -1061,6 +1210,8 @@ void LoadPlugins()
 
     if (nWantsToLoadPlugins)
     {
+        gPluginLoadingOrder = ParseLoadingOrder(iniPaths);
+
         auto sExtraPlugins = [](const std::wstring& pathsString) -> std::vector<std::wstring>
         {
             std::vector<std::wstring> entries;
@@ -1128,6 +1279,10 @@ void LoadPlugins()
                 szSelfPath.c_str(),
                 nWantsToLoadRecursively);
         }
+    }
+    else
+    {
+        gPluginLoadingOrder.clear();
     }
 
     SetCurrentDirectoryW(oldDir.c_str()); // Reset the current directory
