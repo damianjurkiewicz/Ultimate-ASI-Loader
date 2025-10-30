@@ -28,6 +28,7 @@
 LPCWSTR szFooter = L"<a href=\"" ws_UpdateUrl "\">" ws_UpdateUrl "</a>";
 constexpr auto DEFAULT_BUTTON = 1000;
 #define IDI_CUSTOM_ICON 102
+#define NOMINMAX
 
 #if !X64
 #include <d3d8to9\source\d3d8to9.hpp>
@@ -519,10 +520,10 @@ std::unordered_map<std::wstring, int> ParseLoadingOrder(const std::vector<std::w
             if (!trailingWhitespaceOnly)
                 continue;
 
-            if (orderValue > std::numeric_limits<int>::max())
-                orderValue = std::numeric_limits<int>::max();
-            if (orderValue < std::numeric_limits<int>::min())
-                orderValue = std::numeric_limits<int>::min();
+            if (orderValue > (std::numeric_limits<int>::max)())
+                orderValue = (std::numeric_limits<int>::max)();
+            if (orderValue < (std::numeric_limits<int>::min)())
+                orderValue = (std::numeric_limits<int>::min)();
 
             auto normalizedKey = ToLowerCopy(key);
             loadingOrder[normalizedKey] = static_cast<int>(orderValue);
@@ -544,7 +545,7 @@ std::unordered_map<std::wstring, int> ParseLoadingOrder(const std::vector<std::w
 int GetLoadingOrderForPlugin(const std::wstring& fileName)
 {
     if (gPluginLoadingOrder.empty())
-        return std::numeric_limits<int>::max();
+        return (std::numeric_limits<int>::max)();
 
     auto normalized = ToLowerCopy(fileName);
     auto it = gPluginLoadingOrder.find(normalized);
@@ -559,7 +560,7 @@ int GetLoadingOrderForPlugin(const std::wstring& fileName)
             return baseIt->second;
     }
 
-    return std::numeric_limits<int>::max();
+    return (std::numeric_limits<int>::max)();
 }
 
 template<typename T, typename... Args>
@@ -992,7 +993,7 @@ void FindFiles(WIN32_FIND_DATAW* fd)
     struct PluginCandidate
     {
         WIN32_FIND_DATAW data{};
-        int order = std::numeric_limits<int>::max();
+        int order = (std::numeric_limits<int>::max)();
     };
 
     std::vector<PluginCandidate> candidates;

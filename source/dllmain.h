@@ -12,6 +12,7 @@
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
+
 struct shared
 {
     FARPROC DllCanUnloadNow;
