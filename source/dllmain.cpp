@@ -1128,6 +1128,10 @@ void FindPlugins(WIN32_FIND_DATAW fd,
             if (!i.is_directory(ec))
                 continue;
 
+            auto entryName = i.path().filename().native();
+            if (!entryName.empty() && entryName.front() == L'.')
+                continue;
+
             SetCurrentDirectoryW(szSelfPath);
 
             if (SetCurrentDirectoryW(i.path().wstring().c_str()))
