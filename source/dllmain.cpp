@@ -1,5 +1,6 @@
 #include "dllmain.h"
 #include "exception.hpp"
+#include "logger.h"
 #include "miniz.h"
 #include <initguid.h>
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <algorithm>
+#include <iomanip>
 #include <limits>
 #include <cwchar>
 #include <cwctype>
@@ -665,6 +667,8 @@ void LoadOriginalLibrary()
     auto szSystemPath = SHGetKnownFolderPath(FOLDERID_System, 0, nullptr) + L'\\' + szSelfName;
     auto szLocalPath = GetModuleFileNameW(hm); szLocalPath = szLocalPath.substr(0, szLocalPath.find_last_of(L"/\\") + 1);
 
+    LOG_INFO(L"Resolving original library for " << szSelfName);
+
     if (iequals(szSelfName, L"dsound.dll"))
     {
         szLocalPath += L"dsoundHooked.dll";
@@ -948,6 +952,7 @@ void LoadOriginalLibrary()
             ExitProcess(0);
         }
 
+    LOG_INFO(L"Original library setup completed for " << szSelfName);
 }
 
 #if !X64
@@ -990,6 +995,8 @@ void FindFiles(WIN32_FIND_DATAW* fd)
 {
     auto dir = GetCurrentDirectoryW();
 
+    LOG_DEBUG(L"Scanning directory " << dir << L" for ASI plugins");
+
     struct PluginCandidate
     {
         WIN32_FIND_DATAW data{};
@@ -1025,16 +1032,23 @@ void FindFiles(WIN32_FIND_DATAW* fd)
     }
 
     if (candidates.empty())
+    {
+        LOG_DEBUG(L"No plugins found in directory " << dir);
         return;
+    }
 
     std::stable_sort(candidates.begin(), candidates.end(), [](const PluginCandidate& lhs, const PluginCandidate& rhs)
     {
         return lhs.order < rhs.order;
     });
 
+    LOG_INFO(L"Discovered " << candidates.size() << L" plugin candidates in " << dir);
+
     auto loadPlugin = [&](const WIN32_FIND_DATAW& data)
     {
         auto path = dir + L'\\' + data.cFileName;
+
+        LOG_DEBUG(L"Attempting to load plugin " << data.cFileName << L" from " << path);
 
         if (GetModuleHandle(path.c_str()) == NULL)
         {
@@ -1044,6 +1058,7 @@ void FindFiles(WIN32_FIND_DATAW* fd)
             if (h == NULL)
             {
                 auto e = GetLastError();
+                LOG_ERROR(L"Failed to load plugin " << data.cFileName << L" (error " << e << L")");
                 if (e != ERROR_DLL_INIT_FAILED && e != ERROR_BAD_EXE_FORMAT) // in case dllmain returns false or IMAGE_MACHINE is not compatible
                 {
                     TASKDIALOGCONFIG tdc = { sizeof(TASKDIALOGCONFIG) };
@@ -1091,12 +1106,17 @@ void FindFiles(WIN32_FIND_DATAW* fd)
             }
             else
             {
+                LOG_INFO(L"Successfully loaded plugin " << data.cFileName);
                 auto procedure = (void(*)())GetProcAddress(h, "InitializeASI");
                 if (procedure != NULL)
                 {
                     procedure();
                 }
             }
+        }
+        else
+        {
+            LOG_DEBUG(L"Plugin already loaded, skipping " << data.cFileName);
         }
     };
 
@@ -1156,6 +1176,8 @@ void LoadPlugins()
     auto szSelfPath = GetModuleFileNameW(hm).substr(0, GetModuleFileNameW(hm).find_last_of(L"/\\") + 1);
     SetCurrentDirectoryW(szSelfPath.c_str());
 
+    LOG_INFO(L"LoadPlugins started (working directory: " << szSelfPath << L")");
+
 #if !X64
     std::fstream wndmode_ini;
     wndmode_ini.open("wndmode.ini", std::ios_base::out | std::ios_base::in | std::ios_base::binary);
@@ -1213,6 +1235,10 @@ void LoadPlugins()
     auto nWantsToLoadRecursively = GetPrivateProfileIntW(L"globalsets", L"loadrecursively", TRUE, iniPaths);
     auto sLoadExtraPlugins = GetPrivateProfileStringW(TEXT("globalsets"), TEXT("loadextraplugins"), TEXT("modloader\\modloader.asi"), iniPaths);
 
+    LOG_INFO(L"Plugin loading configuration: loadplugins=" << nWantsToLoadPlugins
+        << L", loadfromscriptsonly=" << nWantsToLoadFromScriptsOnly
+        << L", loadrecursively=" << nWantsToLoadRecursively);
+
     if (nWantsToLoadPlugins)
     {
         gPluginLoadingOrder = ParseLoadingOrder(iniPaths);
@@ -1255,9 +1281,11 @@ void LoadPlugins()
 
         if (!sExtraPlugins.empty())
         {
+            LOG_INFO(L"Loading extra plugins list size: " << sExtraPlugins.size());
             for (const auto& it : sExtraPlugins)
             {
                 SetCurrentDirectoryW(szSelfPath.c_str());
+                LOG_DEBUG(L"Loading extra plugin: " << it);
                 LoadLib(it);
                 SetCurrentDirectoryW(oldDir.c_str());
             }
@@ -1288,28 +1316,42 @@ void LoadPlugins()
     else
     {
         gPluginLoadingOrder.clear();
+        LOG_INFO(L"Plugin loading disabled by configuration");
     }
 
     SetCurrentDirectoryW(oldDir.c_str()); // Reset the current directory
+    LOG_INFO(L"LoadPlugins finished");
 }
 
 static LONG LoadedPluginsYet = 0;
 void LoadEverything()
 {
-    if (_InterlockedCompareExchange(&LoadedPluginsYet, 1, 0) != 0) return;
+    LOG_INFO(L"LoadEverything invoked");
+    if (_InterlockedCompareExchange(&LoadedPluginsYet, 1, 0) != 0)
+    {
+        LOG_DEBUG(L"LoadEverything already executed, skipping");
+        return;
+    }
 
+    LOG_DEBUG(L"Loading original libraries");
     LoadOriginalLibrary();
 #if !X64
     Direct3D8DisableMaximizedWindowedModeShim();
 #endif
+    LOG_DEBUG(L"Loading plugins");
     LoadPlugins();
+    LOG_INFO(L"LoadEverything completed");
 }
 
 static LONG RestoredOnce = 0;
 void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = L"")
 {
+    LOG_DEBUG(L"LoadPluginsAndRestoreIAT invoked from " << calledFrom << L" (ret=0x" << std::hex << retaddr << std::dec << L")");
     if (!sLoadFromAPI.empty() && calledFrom != sLoadFromAPI)
+    {
+        LOG_DEBUG(L"Skipping LoadPluginsAndRestoreIAT because call originated from " << calledFrom);
         return;
+    }
 
     bool calledFromBind = false;
 
@@ -1524,6 +1566,7 @@ void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = 
     }
 
     LoadEverything();
+    LOG_DEBUG(L"LoadPluginsAndRestoreIAT completed");
 }
 
 HMODULE LoadLib(const std::wstring& lpLibFileName)
@@ -4316,6 +4359,11 @@ namespace OverloadFromFolder
 std::set<std::string> importedModulesList;
 bool HookKernel32IAT(HMODULE mod, bool exe)
 {
+    wchar_t moduleNameBuffer[MAX_PATH] = { 0 };
+    GetModuleFileNameW(mod, moduleNameBuffer, MAX_PATH);
+    std::wstring moduleLabel = moduleNameBuffer[0] ? moduleNameBuffer : L"<unknown>";
+    LOG_DEBUG(L"HookKernel32IAT started for " << moduleLabel << L" (exe=" << std::boolalpha << exe << std::noboolalpha << L")");
+
     auto hExecutableInstance = (size_t)mod;
     IMAGE_NT_HEADERS*           ntHeader = (IMAGE_NT_HEADERS*)(hExecutableInstance + ((IMAGE_DOS_HEADER*)hExecutableInstance)->e_lfanew);
     IMAGE_IMPORT_DESCRIPTOR*    pImports = (IMAGE_IMPORT_DESCRIPTOR*)(hExecutableInstance + ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
@@ -5425,7 +5473,17 @@ bool HookKernel32IAT(HMODULE mod, bool exe)
     {
         PatchOrdinals((size_t)std::get<HMODULE>(e));
     }
-    return matchedImports > 0;
+    bool hooked = matchedImports > 0;
+    if (hooked)
+    {
+        LOG_INFO(L"Hooked " << matchedImports << L" Kernel32 imports for " << moduleLabel);
+    }
+    else
+    {
+        LOG_WARNING(L"No Kernel32 imports replaced for " << moduleLabel);
+    }
+
+    return hooked;
 }
 
 LONG WINAPI CustomUnhandledExceptionFilter(LPEXCEPTION_POINTERS ExceptionInfo)
@@ -5523,11 +5581,24 @@ void Init()
     std::wstring moduleName = modulePath.substr(modulePath.find_last_of(L"/\\") + 1);
     moduleName.resize(moduleName.find_last_of(L'.'));
     modulePath.resize(modulePath.find_last_of(L"/\\") + 1);
+
+    Logging::Initialize(std::filesystem::path(modulePath));
+
     iniPaths.emplace_back(modulePath + moduleName + L".ini");
     iniPaths.emplace_back(modulePath + L"global.ini");
     iniPaths.emplace_back(modulePath + L"scripts\\global.ini");
     iniPaths.emplace_back(modulePath + L"plugins\\global.ini");
     iniPaths.emplace_back(modulePath + L"update\\global.ini");
+
+    auto loggingLevelString = TrimCopy(GetPrivateProfileStringW(TEXT("logging"), TEXT("level"), TEXT("info"), iniPaths));
+    auto resolvedLogLevel = Logging::SetLevelFromString(loggingLevelString);
+
+    LOG_INFO(L"Initializing Ultimate ASI Loader for module " << moduleName << L" (PID " << GetCurrentProcessId() << L")");
+    LOG_INFO(L"Log file: " << Logging::GetLogFilePath().wstring() << L" | Level: " << Logging::ToString(resolvedLogLevel));
+    for (const auto& path : iniPaths)
+    {
+        LOG_DEBUG(L"Configuration path: " << path);
+    }
 
     auto nForceEPHook = GetPrivateProfileIntW(TEXT("globalsets"), TEXT("forceentrypointhook"), FALSE, iniPaths);
     auto nDontLoadFromDllMain = GetPrivateProfileIntW(TEXT("globalsets"), TEXT("dontloadfromdllmain"), TRUE, iniPaths);
@@ -5535,10 +5606,20 @@ void Init()
     auto nFindModule = GetPrivateProfileIntW(TEXT("globalsets"), TEXT("findmodule"), FALSE, iniPaths);
     auto nDisableCrashDumps = GetPrivateProfileIntW(TEXT("globalsets"), TEXT("disablecrashdumps"), FALSE, iniPaths);
 
+    LOG_INFO(L"forceentrypointhook=" << nForceEPHook
+        << L", dontloadfromdllmain=" << nDontLoadFromDllMain
+        << L", findmodule=" << nFindModule
+        << L", disablecrashdumps=" << nDisableCrashDumps);
+    if (!sLoadFromAPI.empty())
+    {
+        LOG_INFO(L"loadfromapi=" << sLoadFromAPI);
+    }
+
     if (!nDisableCrashDumps)
     {
         if (FolderExists(L"CrashDumps"))
         {
+            LOG_DEBUG(L"Crash dumps enabled, installing exception filter");
             SetUnhandledExceptionFilter(CustomUnhandledExceptionFilter);
             // Now stub out CustomUnhandledExceptionFilter so NO ONE ELSE can set it!
 #if !X64
@@ -5551,6 +5632,14 @@ void Init()
             memcpy(&SetUnhandledExceptionFilter, &ret, sizeof(ret));
             VirtualProtect(&SetUnhandledExceptionFilter, sizeof(ret), protect[0], &protect[1]);
         }
+        else
+        {
+            LOG_WARNING(L"CrashDumps folder not found - crash logging disabled");
+        }
+    }
+    else
+    {
+        LOG_INFO(L"Crash dump generation disabled via configuration");
     }
 
     if (nForceEPHook != FALSE || nDontLoadFromDllMain != FALSE)
@@ -5568,9 +5657,11 @@ void Init()
         catch (...) {}
 
         HMODULE mainModule = GetModuleHandle(NULL);
+        LOG_INFO(L"Attempting to hook Kernel32 imports for main module");
         bool hookedSuccessfully = HookKernel32IAT(mainModule, true);
         if (!hookedSuccessfully)
         {
+            LOG_WARNING(L"Failed to hook Kernel32 imports for main module, loading original library");
             LoadOriginalLibrary();
         }
 
@@ -5613,11 +5704,13 @@ void Init()
 
         if (m != mainModule)
         {
+            LOG_INFO(L"Attempting to hook Kernel32 imports for dependency module");
             HookKernel32IAT(m, false);
         }
     }
     else
     {
+        LOG_INFO(L"Loading everything immediately (no entry point hook)");
         LoadEverything();
     }
 }
@@ -5628,9 +5721,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
     {
         hm = hModule;
         Init();
+        LOG_INFO(L"DLL process attach handled successfully");
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
+        LOG_INFO(L"DLL process detach received");
         for (size_t i = 0; i < OLE32ExportsNamesCount; i++)
         {
             if (OLE32Data[i][IATPtr] && OLE32Data[i][ProcAddress])
@@ -5642,6 +5737,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
                 VirtualProtect(ptr, sizeof(size_t), dwProtect[0], &dwProtect[1]);
             }
         }
+        Logging::Shutdown();
     }
     return TRUE;
 }
