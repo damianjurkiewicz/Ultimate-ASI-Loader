@@ -5723,6 +5723,8 @@ void Main_DoInit()
 {
     // KROK 1: Uruchom Twoją obecną logikę inicjalizacji (która hakuje IAT)
     // Ta funkcja jest teraz wywoływana POZA DllMain, więc jest bezpieczna!
+    LOG_DEBUG(L"Main_DoInit: Entry Point hook successful. Calling Init() and restoring EP...");
+    
     Init();
 
     // KROK 2: Przywróć oryginalny kod Entry Point
@@ -5757,7 +5759,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
 
         // NOWA METODA (Dodajemy to):
         hExecutableInstance_UASIL = GetModuleHandle(NULL);
-
+        LOG_DEBUG(L"DllMain: Executable instance found. Patching Entry Point...");
         if (hExecutableInstance_UASIL)
         {
             IMAGE_NT_HEADERS* ntHeader = (IMAGE_NT_HEADERS*)((DWORD)hExecutableInstance_UASIL + ((IMAGE_DOS_HEADER*)hExecutableInstance_UASIL)->e_lfanew);
