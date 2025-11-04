@@ -69,7 +69,7 @@ project "Ultimate-ASI-Loader-Win32"
    includedirs { "external/miniz" }
    files { "external/miniz/miniz.c", "external/miniz/miniz.h" }
 
-   files { "source/dllmain.h", "source/dllmain.cpp" }
+   files { "source/dllmain.h", "source/dllmain.cpp", "source/logger.h", "source/logger.cpp" }
    files { "source/x86.def" }
    files { "source/xlive/xliveless.h", "source/xlive/xliveless.cpp", "source/xlive/xliveless.rc"}
    files { "source/resources/Versioninfo.rc", "source/resources/UALx86.rc" }
@@ -252,7 +252,7 @@ project "Ultimate-ASI-Loader-x64"
    includedirs { "external/miniz" }
    files { "external/miniz/miniz.c", "external/miniz/miniz.h" }
 
-   files { "source/dllmain.h", "source/dllmain.cpp" }
+   files { "source/dllmain.h", "source/dllmain.cpp", "source/logger.h", "source/logger.cpp" }
    files { "source/x64.def" }
    files { "source/resources/Versioninfo.rc", "source/resources/UALx64.rc" }
    
