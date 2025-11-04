@@ -826,12 +826,7 @@ void LoadOriginalLibrary()
                             {
                                 vorbisfile.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
 
-                                // Unprotect the module NOW (CLEO 4.1.1.30f crash fix)
-                                auto hExecutableInstance = (size_t)GetModuleHandle(NULL);
-                                IMAGE_NT_HEADERS* ntHeader = (IMAGE_NT_HEADERS*)(hExecutableInstance + ((IMAGE_DOS_HEADER*)hExecutableInstance)->e_lfanew);
-                                SIZE_T size = ntHeader->OptionalHeader.SizeOfImage;
-                                DWORD oldProtect;
-                                VirtualProtect((VOID*)hExecutableInstance, size, PAGE_EXECUTE_READWRITE, &oldProtect);
+                                
                             }
                         }
                     }
@@ -1342,6 +1337,14 @@ void LoadEverything()
 #if !X64
     Direct3D8DisableMaximizedWindowedModeShim();
 #endif
+
+    // Unprotect the module NOW (CLEO 4.1.1.30f crash fix)
+    auto hExecutableInstance = (size_t)GetModuleHandle(NULL);
+    IMAGE_NT_HEADERS* ntHeader = (IMAGE_NT_HEADERS*)(hExecutableInstance + ((IMAGE_DOS_HEADER*)hExecutableInstance)->e_lfanew);
+    SIZE_T size = ntHeader->OptionalHeader.SizeOfImage;
+    DWORD oldProtect;
+    VirtualProtect((VOID*)hExecutableInstance, size, PAGE_EXECUTE_READWRITE, &oldProtect);
+
     LOG_DEBUG(L"Loading plugins");
     LoadPlugins();
     LOG_INFO(L"LoadEverything completed");
