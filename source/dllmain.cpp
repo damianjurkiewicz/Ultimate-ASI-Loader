@@ -805,29 +805,20 @@ void LoadOriginalLibrary()
 #if !X64
         if (iequals(szSelfName, L"vorbisFile.dll"))
         {
-            szLocalPath += L"vorbisHooked.dll";
-            if (std::filesystem::exists(szLocalPath))
+            // ZAWSZE ładuj wbudowaną wersję vorbis z zasobów
+            HRSRC hResource = FindResource(hm, MAKEINTRESOURCE(IDR_VORBISF), RT_RCDATA);
+            if (hResource)
             {
-                vorbisfile.LoadOriginalLibrary(LoadLib(szLocalPath), false);
-            }
-            else
-            {
-                HRSRC hResource = FindResource(hm, MAKEINTRESOURCE(IDR_VORBISF), RT_RCDATA);
-                if (hResource)
+                HGLOBAL hLoadedResource = LoadResource(hm, hResource);
+                if (hLoadedResource)
                 {
-                    HGLOBAL hLoadedResource = LoadResource(hm, hResource);
-                    if (hLoadedResource)
+                    LPVOID pLockedResource = LockResource(hLoadedResource);
+                    if (pLockedResource)
                     {
-                        LPVOID pLockedResource = LockResource(hLoadedResource);
-                        if (pLockedResource)
+                        size_t dwResourceSize = SizeofResource(hm, hResource);
+                        if (0 != dwResourceSize)
                         {
-                            size_t dwResourceSize = SizeofResource(hm, hResource);
-                            if (0 != dwResourceSize)
-                            {
-                                vorbisfile.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
-
-                                
-                            }
+                            vorbisfile.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
                         }
                     }
                 }
@@ -1241,6 +1232,48 @@ void LoadPlugins()
     if (nWantsToLoadPlugins)
     {
         gPluginLoadingOrder = ParseLoadingOrder(iniPaths);
+
+        LOG_DEBUG(L"Loading COMP.dll (Compatibility)");
+        if (LoadLibraryW(L"COMP.dll") == NULL)
+        {
+            // --- ZMODYFIKOWANY BLOK - COMP.dll JEST WYMAGANY ---
+            LOG_DEBUG(L"Loading COMP.dll (Compatibility)");
+
+            // Próbujemy załadować COMP.dll z tego samego folderu co loader
+            wchar_t compPath[MAX_PATH];
+            GetModuleFileNameW(hm, compPath, MAX_PATH); // Pobierz ścieżkę do vorbisFile.dll
+            wchar_t* lastSlash = wcsrchr(compPath, L'\\');
+            if (lastSlash)
+            {
+                *(lastSlash + 1) = L'\0'; // Ścieżka to teraz folder gry
+                wcscat_s(compPath, L"COMP.dll"); // Dodaj nazwę pliku
+            }
+            else
+            {
+                // Fallback, jeśli ścieżka zawiedzie
+                wcscpy_s(compPath, L"COMP.dll");
+            }
+
+            if (LoadLibraryW(compPath) == NULL)
+            {
+                // To JEST krytyczny błąd.
+                LOG_ERROR(L"Could not load COMP.dll! ASI loading will be aborted.");
+
+                MessageBoxW(
+                    NULL,
+                    L"Library'COMP.dll' is missing.\n\n"
+                    L"Ultimate ASI Loader will be aborted",
+                    L"COMP (Ultimate ASI Loader) - Critical Error",
+                    MB_OK | MB_ICONERROR | MB_SETFOREGROUND
+                );
+
+                // Zakończ działanie funkcji LoadPlugins. Żadne pluginy ASI nie zostaną załadowane.
+                ExitProcess(1);
+            }
+            LOG_DEBUG(L"COMP.dll loaded successfully.");
+            // --- KONIEC ZMODYFIKOWANEGO BLOKU ---
+            LOG_WARNING(L"Could not load COMP.dll. This file is recommended for compatibility checks.");
+        }
 
         auto sExtraPlugins = [](const std::wstring& pathsString) -> std::vector<std::wstring>
         {
