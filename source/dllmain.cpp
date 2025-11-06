@@ -4460,7 +4460,7 @@ bool HookKernel32IAT(HMODULE mod, bool exe)
                 *(size_t*)i = (size_t)CustomGetStartupInfoW;
                 matchedImports++;
             }
-            else if (ptr == Kernel32Data[eGetModuleHandleA][ProcAddress])
+            /*else if (ptr == Kernel32Data[eGetModuleHandleA][ProcAddress])
             {
                 if (exe) Kernel32Data[eGetModuleHandleA][IATPtr] = i;
                 *(size_t*)i = (size_t)CustomGetModuleHandleA;
@@ -4645,7 +4645,7 @@ bool HookKernel32IAT(HMODULE mod, bool exe)
                 if (exe) Kernel32Data[eGetFileAttributesExW][IATPtr] = i;
                 *(size_t*)i = (size_t)CustomGetFileAttributesExW;
                 matchedImports++;
-            }
+            }*/
 
             VirtualProtect((size_t*)i, sizeof(size_t), dwProtect[0], &dwProtect[1]);
         }
