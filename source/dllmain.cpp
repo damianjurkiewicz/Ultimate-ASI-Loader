@@ -1049,6 +1049,7 @@ void FindFiles(WIN32_FIND_DATAW* fd)
             {
                 auto e = GetLastError();
                 LOG_ERROR(L"Failed to load plugin " << data.cFileName << L" (error " << e << L")");
+                /*
                 if (e != ERROR_DLL_INIT_FAILED && e != ERROR_BAD_EXE_FORMAT) // in case dllmain returns false or IMAGE_MACHINE is not compatible
                 {
                     TASKDIALOGCONFIG tdc = { sizeof(TASKDIALOGCONFIG) };
@@ -1093,6 +1094,7 @@ void FindFiles(WIN32_FIND_DATAW* fd)
                     else
                         MessageBoxW(NULL, szHeader, szTitle, MB_OK | MB_ICONERROR);
                 }
+                */
             }
             else
             {
@@ -1419,7 +1421,7 @@ void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = 
             VirtualProtect(ptr, sizeof(size_t), dwProtect[0], &dwProtect[1]);
         }
     }
-
+    /*
     {
         using namespace OverloadFromFolder;
 
@@ -1604,7 +1606,7 @@ void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = 
             HookAPIForVirtualFiles();
         }
     }
-
+    */
     LoadEverything();
     LOG_DEBUG(L"LoadPluginsAndRestoreIAT completed");
 }
