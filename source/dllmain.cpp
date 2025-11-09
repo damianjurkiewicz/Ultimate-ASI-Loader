@@ -668,279 +668,37 @@ void LoadOriginalLibrary()
     if (_InterlockedCompareExchange(&OriginalLibraryLoaded, 1, 0) != 0) return;
 
     auto szSelfName = GetSelfName();
-    auto szSystemPath = SHGetKnownFolderPath(FOLDERID_System, 0, nullptr) + L'\\' + szSelfName;
-    auto szLocalPath = GetModuleFileNameW(hm); szLocalPath = szLocalPath.substr(0, szLocalPath.find_last_of(L"/\\") + 1);
-
     LOG_INFO(L"Resolving original library for " << szSelfName);
 
-    if (iequals(szSelfName, L"dsound.dll"))
+#if !X64
+    if (iequals(szSelfName, L"vorbisFile.dll"))
     {
-        szLocalPath += L"dsoundHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            dsound.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            dsound.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"dinput8.dll"))
-    {
-        szLocalPath += L"dinput8Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            dinput8.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            dinput8.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"wininet.dll"))
-    {
-        szLocalPath += L"wininetHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            wininet.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            wininet.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"version.dll"))
-    {
-        szLocalPath += L"versionHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            version.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            version.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"d3d9.dll"))
-    {
-        szLocalPath += L"d3d9Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            d3d9.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            d3d9.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"d3d10.dll"))
-    {
-        szLocalPath += L"d3d10Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            d3d10.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            d3d10.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"d3d11.dll"))
-    {
-        szLocalPath += L"d3d11Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            d3d11.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            d3d11.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"d3d12.dll"))
-    {
-        szLocalPath += L"d3d12Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            d3d12.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            d3d12.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"winmm.dll"))
-    {
-        szLocalPath += L"winmmHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            winmm.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            winmm.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"winhttp.dll"))
-    {
-        szLocalPath += L"winhttpHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            winhttp.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            winhttp.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"xinput1_1.dll"))
-    {
-        szLocalPath += L"xinput1_1Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"xinput1_2.dll"))
-    {
-        szLocalPath += L"xinput1_2Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"xinput1_3.dll"))
-    {
-        szLocalPath += L"xinput1_3Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"XInput1_4.dll"))
-    {
-        szLocalPath += L"XInput1_4Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"XInput9_1_0.dll"))
-    {
-        szLocalPath += L"XInput9_1_0Hooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-    }
-    else if (iequals(szSelfName, L"XInputUap.dll"))
-    {
-        szLocalPath += L"XInputUapHooked.dll";
-        if (std::filesystem::exists(szLocalPath))
-            xinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-        else
-            xinput.LoadOriginalLibrary(LoadLib(szSystemPath));
+        // ZAWSZE ładuj wbudowaną wersję vorbis z zasobów
+        HRSRC hResource = FindResource(hm, MAKEINTRESOURCE(IDR_VORBISF), RT_RCDATA);
+        if (hResource)
+        {
+            HGLOBAL hLoadedResource = LoadResource(hm, hResource);
+            if (hLoadedResource)
+            {
+                LPVOID pLockedResource = LockResource(hLoadedResource);
+                if (pLockedResource)
+                {
+                    size_t dwResourceSize = SizeofResource(hm, hResource);
+                    if (0 != dwResourceSize)
+                    {
+                        vorbisfile.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
+                    }
+                }
+            }
+        }
     }
     else
-#if !X64
-        if (iequals(szSelfName, L"vorbisFile.dll"))
-        {
-            // ZAWSZE ładuj wbudowaną wersję vorbis z zasobów
-            HRSRC hResource = FindResource(hm, MAKEINTRESOURCE(IDR_VORBISF), RT_RCDATA);
-            if (hResource)
-            {
-                HGLOBAL hLoadedResource = LoadResource(hm, hResource);
-                if (hLoadedResource)
-                {
-                    LPVOID pLockedResource = LockResource(hLoadedResource);
-                    if (pLockedResource)
-                    {
-                        size_t dwResourceSize = SizeofResource(hm, hResource);
-                        if (0 != dwResourceSize)
-                        {
-                            vorbisfile.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
-                        }
-                    }
-                }
-            }
-        }
-        else if (iequals(szSelfName, L"ddraw.dll"))
-        {
-            szLocalPath += L"ddrawHooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-                ddraw.LoadOriginalLibrary(LoadLib(szLocalPath));
-            else
-                ddraw.LoadOriginalLibrary(LoadLib(szSystemPath));
-        }
-        else if (iequals(szSelfName, L"d3d8.dll"))
-        {
-            szLocalPath += L"d3d8Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-                d3d8.LoadOriginalLibrary(LoadLib(szLocalPath));
-            else
-            {
-                d3d8.LoadOriginalLibrary(LoadLib(szSystemPath));
-                if (GetPrivateProfileIntW(L"globalsets", L"used3d8to9", FALSE, iniPaths))
-                    d3d8.Direct3DCreate8 = (FARPROC)Direct3DCreate8;
-            }
-        }
-        else if (iequals(szSelfName, L"msacm32.dll"))
-        {
-            szLocalPath += L"msacm32Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-                msacm32.LoadOriginalLibrary(LoadLib(szLocalPath));
-            else
-                msacm32.LoadOriginalLibrary(LoadLib(szSystemPath));
-        }
-        else if (iequals(szSelfName, L"dinput.dll"))
-        {
-            szLocalPath += L"dinputHooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-                dinput.LoadOriginalLibrary(LoadLib(szLocalPath));
-            else
-                dinput.LoadOriginalLibrary(LoadLib(szSystemPath));
-        }
-        else if (iequals(szSelfName, L"msvfw32.dll"))
-        {
-            szLocalPath += L"msvfw32Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-                msvfw32.LoadOriginalLibrary(LoadLib(szLocalPath));
-            else
-                msvfw32.LoadOriginalLibrary(LoadLib(szSystemPath));
-        }
-        else if (iequals(szSelfName, L"binkw32.dll"))
-        {
-            szLocalPath += L"binkw32Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-            {
-                bink2w32.LoadOriginalLibrary(LoadLib(szLocalPath), false);
-            }
-            else
-            {
-                HRSRC hResource = FindResource(hm, MAKEINTRESOURCE(IDR_BINK), RT_RCDATA);
-                if (hResource)
-                {
-                    HGLOBAL hLoadedResource = LoadResource(hm, hResource);
-                    if (hLoadedResource)
-                    {
-                        LPVOID pLockedResource = LockResource(hLoadedResource);
-                        if (pLockedResource)
-                        {
-                            size_t dwResourceSize = SizeofResource(hm, hResource);
-                            if (0 != dwResourceSize)
-                            {
-                                bink2w32.LoadOriginalLibrary(ogMemModule = MemoryLoadLibrary((const void*)pLockedResource, dwResourceSize), true);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        else if (iequals(szSelfName, L"bink2w32.dll"))
-        {
-            szLocalPath += L"bink2w32Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-            {
-                bink2w32.LoadOriginalLibrary(LoadLib(szLocalPath), false);
-            }
-        }
-        else if (iequals(szSelfName, L"xlive.dll"))
-        {
-            // Unprotect image - make .text and .rdata section writeable
-            GetSections([](PIMAGE_SECTION_HEADER pSection, size_t dwLoadOffset, DWORD dwPhysSize)
-            {
-                DWORD oldProtect = 0;
-                DWORD newProtect = (pSection->Characteristics & IMAGE_SCN_MEM_EXECUTE) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
-                if (!VirtualProtect(reinterpret_cast<VOID*>(dwLoadOffset + pSection->VirtualAddress), dwPhysSize, newProtect, &oldProtect))
-                {
-                    ExitProcess(0);
-                }
-            }, ".text", ".rdata");
-        }
-        else
-#else
-        if (iequals(szSelfName, L"bink2w64.dll"))
-        {
-            szLocalPath += L"bink2w64Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-            {
-                bink2w64.LoadOriginalLibrary(LoadLib(szLocalPath));
-            }
-        }
-        else if (iequals(szSelfName, L"binkw64.dll"))
-        {
-            szLocalPath += L"binkw64Hooked.dll";
-            if (std::filesystem::exists(szLocalPath))
-            {
-                bink2w64.LoadOriginalLibrary(LoadLib(szLocalPath));
-            }
-        }
-        else
 #endif
-        {
-            MessageBox(0, TEXT("This library isn't supported."), TEXT("ASI Loader"), MB_ICONERROR);
-            ExitProcess(0);
-        }
+    {
+        // Jeśli nazwa DLL nie jest 'vorbisFile.dll', pokaż błąd i zakończ.
+        MessageBox(0, TEXT("This library isn't supported."), TEXT("ASI Loader"), MB_ICONERROR);
+        ExitProcess(0);
+    }
 
     LOG_INFO(L"Original library setup completed for " << szSelfName);
 }
@@ -1370,7 +1128,9 @@ void LoadEverything()
     LOG_DEBUG(L"Loading original libraries");
     LoadOriginalLibrary();
 #if !X64
-    Direct3D8DisableMaximizedWindowedModeShim();
+
+    //Direct3D8DisableMaximizedWindowedModeShim();
+
 #endif
 
     // Unprotect the module NOW (CLEO 4.1.1.30f crash fix)
