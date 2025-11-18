@@ -37,6 +37,16 @@ constexpr auto DEFAULT_BUTTON = 1000;
 extern "C" Direct3D8* WINAPI Direct3DCreate8(UINT SDKVersion);
 #endif
 
+// Real GetStartupInfo function pointers (Silent-style)
+typedef VOID(WINAPI* PFN_GetStartupInfoA_Real)(LPSTARTUPINFOA lpStartupInfo);
+typedef VOID(WINAPI* PFN_GetStartupInfoW_Real)(LPSTARTUPINFOW lpStartupInfo);
+
+static PFN_GetStartupInfoA_Real g_RealGetStartupInfoA = nullptr;
+static PFN_GetStartupInfoW_Real g_RealGetStartupInfoW = nullptr;
+
+// Make sure we call LoadEverything() only once from GetStartupInfo*
+static LONG g_PluginsLoadedFromStartupInfo = 0;
+
 BYTE 					originalCode[5];
 BYTE* originalEP = 0;
 HINSTANCE				hExecutableInstance_UASIL;
@@ -1145,6 +1155,135 @@ void LoadEverything()
     LOG_INFO(L"LoadEverything completed");
 }
 
+void WINAPI CustomGetStartupInfoA(LPSTARTUPINFOA lpStartupInfo)
+{
+    // Call LoadEverything() only once (first call)
+    if (_InterlockedCompareExchange(&g_PluginsLoadedFromStartupInfo, 1, 0) == 0)
+    {
+        LOG_DEBUG(L"CustomGetStartupInfoA: first call, calling LoadEverything()");
+        LoadEverything();
+    }
+
+    // Resolve original GetStartupInfoA if needed
+    if (!g_RealGetStartupInfoA)
+    {
+        HMODULE hKernel32 = GetModuleHandleW(L"KERNEL32.DLL");
+        if (hKernel32)
+            g_RealGetStartupInfoA = reinterpret_cast<PFN_GetStartupInfoA_Real>(
+                GetProcAddress(hKernel32, "GetStartupInfoA"));
+    }
+
+    if (g_RealGetStartupInfoA)
+        g_RealGetStartupInfoA(lpStartupInfo);
+}
+
+void WINAPI CustomGetStartupInfoW(LPSTARTUPINFOW lpStartupInfo)
+{
+    if (_InterlockedCompareExchange(&g_PluginsLoadedFromStartupInfo, 1, 0) == 0)
+    {
+        LOG_DEBUG(L"CustomGetStartupInfoW: first call, calling LoadEverything()");
+        LoadEverything();
+    }
+
+    if (!g_RealGetStartupInfoW)
+    {
+        HMODULE hKernel32 = GetModuleHandleW(L"KERNEL32.DLL");
+        if (hKernel32)
+            g_RealGetStartupInfoW = reinterpret_cast<PFN_GetStartupInfoW_Real>(
+                GetProcAddress(hKernel32, "GetStartupInfoW"));
+    }
+
+    if (g_RealGetStartupInfoW)
+        g_RealGetStartupInfoW(lpStartupInfo);
+}
+
+
+static void PatchGetStartupInfoIAT()
+{
+    BYTE* base = reinterpret_cast<BYTE*>(GetModuleHandleW(nullptr));
+    if (!base)
+        return;
+
+    IMAGE_DOS_HEADER* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return;
+
+    IMAGE_NT_HEADERS* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return;
+
+    const IMAGE_DATA_DIRECTORY& importsDir =
+        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!importsDir.VirtualAddress || !importsDir.Size)
+        return;
+
+    IMAGE_IMPORT_DESCRIPTOR* pImports =
+        reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + importsDir.VirtualAddress);
+
+    for (; pImports->Name; ++pImports)
+    {
+        const char* modName = reinterpret_cast<const char*>(base + pImports->Name);
+        if (_stricmp(modName, "KERNEL32.DLL") != 0 &&
+            _stricmp(modName, "kernel32.dll") != 0)
+        {
+            continue;
+        }
+
+        IMAGE_THUNK_DATA* pThunkOrig =
+            reinterpret_cast<IMAGE_THUNK_DATA*>(base + pImports->OriginalFirstThunk);
+        IMAGE_THUNK_DATA* pThunkFirst =
+            reinterpret_cast<IMAGE_THUNK_DATA*>(base + pImports->FirstThunk);
+
+        for (; pThunkOrig->u1.AddressOfData; ++pThunkOrig, ++pThunkFirst)
+        {
+            if (IMAGE_SNAP_BY_ORDINAL(pThunkOrig->u1.Ordinal))
+                continue;
+
+            auto* pImport = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(
+                base + pThunkOrig->u1.AddressOfData);
+            const char* name = reinterpret_cast<const char*>(pImport->Name);
+            FARPROC* pIATEntry = reinterpret_cast<FARPROC*>(&pThunkFirst->u1.Function);
+
+            if (strcmp(name, "GetStartupInfoA") == 0)
+            {
+                if (!g_RealGetStartupInfoA)
+                {
+                    HMODULE hKernel32 = GetModuleHandleW(L"KERNEL32.DLL");
+                    if (hKernel32)
+                        g_RealGetStartupInfoA = reinterpret_cast<PFN_GetStartupInfoA_Real>(
+                            GetProcAddress(hKernel32, "GetStartupInfoA"));
+                }
+
+                DWORD oldProtect;
+                VirtualProtect(pIATEntry, sizeof(FARPROC), PAGE_EXECUTE_READWRITE, &oldProtect);
+                *pIATEntry = reinterpret_cast<FARPROC>(CustomGetStartupInfoA);
+                VirtualProtect(pIATEntry, sizeof(FARPROC), oldProtect, &oldProtect);
+                LOG_DEBUG(L"Patched IAT entry for GetStartupInfoA");
+            }
+            else if (strcmp(name, "GetStartupInfoW") == 0)
+            {
+                if (!g_RealGetStartupInfoW)
+                {
+                    HMODULE hKernel32 = GetModuleHandleW(L"KERNEL32.DLL");
+                    if (hKernel32)
+                        g_RealGetStartupInfoW = reinterpret_cast<PFN_GetStartupInfoW_Real>(
+                            GetProcAddress(hKernel32, "GetStartupInfoW"));
+                }
+
+                DWORD oldProtect;
+                VirtualProtect(pIATEntry, sizeof(FARPROC), PAGE_EXECUTE_READWRITE, &oldProtect);
+                *pIATEntry = reinterpret_cast<FARPROC>(CustomGetStartupInfoW);
+                VirtualProtect(pIATEntry, sizeof(FARPROC), oldProtect, &oldProtect);
+                LOG_DEBUG(L"Patched IAT entry for GetStartupInfoW");
+            }
+        }
+
+        // We only care about KERNEL32.DLL
+        break;
+    }
+}
+
+
 static LONG RestoredOnce = 0;
 void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = L"")
 {
@@ -1367,7 +1506,8 @@ void LoadPluginsAndRestoreIAT(uintptr_t retaddr, std::wstring_view calledFrom = 
         }
     }
     */
-    LoadEverything();
+    //LoadEverything();
+    LOG_DEBUG(L"LoadEverything() commented here!");
     LOG_DEBUG(L"LoadPluginsAndRestoreIAT completed");
 }
 
@@ -1376,17 +1516,9 @@ HMODULE LoadLib(const std::wstring& lpLibFileName)
     return LoadLibraryW(lpLibFileName.c_str());
 }
 
-void WINAPI CustomGetStartupInfoA(LPSTARTUPINFOA lpStartupInfo)
-{
-    LoadPluginsAndRestoreIAT((uintptr_t)_ReturnAddress(), L"GetStartupInfoA");
-    return GetStartupInfoA(lpStartupInfo);
-}
 
-void WINAPI CustomGetStartupInfoW(LPSTARTUPINFOW lpStartupInfo)
-{
-    LoadPluginsAndRestoreIAT((uintptr_t)_ReturnAddress(), L"GetStartupInfoW");
-    return GetStartupInfoW(lpStartupInfo);
-}
+
+
 
 HMODULE WINAPI CustomGetModuleHandleA(LPCSTR lpModuleName)
 {
@@ -5444,89 +5576,22 @@ void Init()
         LOG_INFO(L"Crash dump generation disabled via configuration");
     }
 
-    if (nForceEPHook != FALSE || nDontLoadFromDllMain != FALSE)
-    {
-        try
-        {
-            auto exeName = std::filesystem::path(GetModulePath(NULL)).stem().wstring();
+    LOG_INFO(L"Using Silent-style GetStartupInfo hook (default).");
 
-            if (sLoadFromAPI.empty()) // compatibility with GTAV/RDR2 plugins
-            {
-                if (iequals(exeName, L"GTA5") || iequals(exeName, L"RDR2") || iequals(exeName, L"game_win64_master"))
-                    sLoadFromAPI = L"GetSystemTimeAsFileTime";
-            }
-        }
-        catch (...) {}
-
-        HMODULE mainModule = GetModuleHandle(NULL);
-        LOG_INFO(L"Attempting to hook Kernel32 imports for main module");
-        bool hookedSuccessfully = HookKernel32IAT(mainModule, true);
-        if (!hookedSuccessfully)
-        {
-            LOG_WARNING(L"Failed to hook Kernel32 imports for main module, loading original library");
-            LoadOriginalLibrary();
-        }
-
-        const auto it = std::find_if(std::begin(importedModulesList), std::end(importedModulesList), [&](const auto& str) { return str == "unityplayer.dll"; });
-        const auto bUnityPlayerImported = it != std::end(importedModulesList);
-
-        HMODULE m = mainModule;
-        if (nFindModule || importedModulesList.size() <= 2 || bUnityPlayerImported)
-        {
-            ModuleList dlls;
-            dlls.Enumerate(ModuleList::SearchLocation::All);
-
-            auto ual = std::find_if(dlls.m_moduleList.begin(), dlls.m_moduleList.end(), [](auto const& it)
-            {
-                return std::get<HMODULE>(it) == hm;
-            });
-
-            auto sim = std::find_if(dlls.m_moduleList.rbegin(), dlls.m_moduleList.rend(), [&ual](auto const& it)
-            {
-                auto str1 = std::get<std::wstring>(*ual);
-                auto str2 = std::get<std::wstring>(it);
-                auto bIsLocal = std::get<bool>(it);
-                std::transform(str1.begin(), str1.end(), str1.begin(), [](wchar_t c) { return ::towlower(c); });
-                std::transform(str2.begin(), str2.end(), str2.begin(), [](wchar_t c) { return ::towlower(c); });
-
-                if (str2 == L"unityplayer" || str2 == L"clr" || str2 == L"coreclr")
-                    return true;
-
-                return bIsLocal && (str2 != str1) && (str2.find(str1) != std::wstring::npos);
-            });
-
-            if (ual != dlls.m_moduleList.begin())
-            {
-                if (sim != dlls.m_moduleList.rend())
-                    m = std::get<HMODULE>(*sim);
-                else
-                    m = std::get<HMODULE>(*std::prev(ual, 1));
-            }
-        }
-
-        if (m != mainModule)
-        {
-            LOG_INFO(L"Attempting to hook Kernel32 imports for dependency module");
-            HookKernel32IAT(m, false);
-        }
-    }
-    else
-    {
-        LOG_INFO(L"Loading everything immediately (no entry point hook)");
-        LoadEverything();
-    }
 }
 
 void Main_DoInit()
 {
-    // KROK 1: Uruchom Twoją obecną logikę inicjalizacji (która hakuje IAT)
-    // Ta funkcja jest teraz wywoływana POZA DllMain, więc jest bezpieczna!
-    LOG_DEBUG(L"Main_DoInit: Entry Point hook successful. Calling Init() and restoring EP...");
-    
+    LOG_DEBUG(L"Main_DoInit: Entry Point hook successful. Initializing core and patching GetStartupInfo IAT...");
+
+    // Initialize logging, ini paths, crashdump filter etc.
     Init();
 
-    // KROK 2: Przywróć oryginalny kod Entry Point
-    // Gra może teraz kontynuować normalne uruchamianie.
+    // Silent-style: only patch GetStartupInfoA/W in IAT.
+    PatchGetStartupInfoIAT();
+    LOG_DEBUG(L"Main_DoInit: GetStartupInfoA/W IAT entries patched (Silent-style)");
+
+    // Restore the original entry point so the game can start normally.
     DWORD oldProtect;
     VirtualProtect(originalEP, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
     *(DWORD*)originalEP = *(DWORD*)&originalCode;
@@ -5534,15 +5599,17 @@ void Main_DoInit()
     VirtualProtect(originalEP, 5, oldProtect, &oldProtect);
 }
 
+
 // NOWA FUNKCJA - przejmuje Entry Point
 void __declspec(naked) EntryPoint_Hook()
 {
-    _asm
+    __asm
     {
-        call	Main_DoInit
-        jmp		originalEP
+        call    Main_DoInit
+        jmp     originalEP
     }
 }
+
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*lpReserved*/)
 {

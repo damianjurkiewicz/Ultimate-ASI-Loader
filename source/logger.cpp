@@ -109,7 +109,15 @@ namespace Logging
             }
         }
 
-        gLogFile = CreateFileW(gLogPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        gLogFile = CreateFileW(
+            gLogPath.c_str(),
+            GENERIC_WRITE,                     // allow writing
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            CREATE_ALWAYS,                     // <-- always recreate file
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        );
         if (gLogFile != INVALID_HANDLE_VALUE)
         {
             gInitialized = true;
